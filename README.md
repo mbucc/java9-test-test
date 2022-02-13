@@ -35,8 +35,21 @@ Open the TestUtil and you can now run the test from IntelliJ.
 
 **Is Maven really that much slower than a Makefile?**
 
-* 1.32 seconds for make
-* 
+* make: 1.32 seconds
+* surefire: I gave up.
+
+Despite lots of examples on the web with a variety of approaches, I could
+not get this to work.  See maven branch for the last failed attempt.
+
+* [Using Java Modularity (JPMS) in Tests](https://maven.apache.org/surefire/maven-surefire-plugin/examples/jpms.html). Use module-info in test directory.
+* [Java 9 + maven + junit: does test code need module-info.java of its own and where to put it?](https://stackoverflow.com/questions/46613214/java-9-maven-junit-does-test-code-need-module-info-java-of-its-own-and-wher/46613986)  Do not use a module info.
+* [Run Tests from a different module](https://gist.github.com/aslakknutsen/1081397): use `testClassesDirectory`
+* [Testing in a Modular World](https://info.michael-simons.eu/2021/10/19/testing-in-a-modular-world/): use `--add-opens`.
+* [ModularClasspathForkConfiguration.java](https://github.com/apache/maven-surefire/blob/master/maven-surefire-common/src/main/java/org/apache/maven/plugin/surefire/booterclient/ModularClasspathForkConfiguration.java)  A src/main/java, src/test/java tree for each module.
+* [Add modulepath support](https://issues.apache.org/jira/browse/SUREFIRE-1262)
+* [Five Command Line Options To Hack The Java Module System](https://nipafx.dev/five-command-line-options-hack-java-module-system/#Reflectively-Accessing-Internal-APIs-With--add-opens)
+
+
 
 ```
 mark@Marks-MBP java-test-test % make clean
@@ -92,12 +105,177 @@ src/main/com.example/, but IntelliJ would not let me---"src/main/com.example" al
 share the same content root.  (This all works fine with the base java
 tools---you just add stuff to the class path as you like.)
 
-**Use --patch-module in Makfile.**
+**Use --patch-module in Makefile.**
 
 This required a module info in the test code.  And a requires junit line.  
 IntelliJ couldn't seem to find it, even though it was a project library.  I
 stopped this approach as it was much simpler just to use the classpath trick
 in the makefile for tests.
+
+**Use standard surefile plugin to run tests**
+
+```
+$ tree src
+src
+├── main
+│   └── java
+│       ├── com
+│       │   └── example
+│       │       ├── Main.java
+│       │       └── util
+│       │           └── Util.java
+│       ├── com.example.iml
+│       └── module-info.java
+└── test
+    └── java
+        └── com
+            └── example
+                └── util
+                    └── TestUtil.java
+                    
+$ mvn -X test
+...
+[DEBUG] args file content:
+--module-path
+"/Users/mark/src/mycode/java-test-test/target/classes"
+--class-path
+...
+--patch-module
+com.example="/Users/mark/src/mycode/java-test-test/target/test-classes"
+--add-exports
+com.example/com.example.util=ALL-UNNAMED
+--add-modules
+com.example
+--add-reads
+com.example=ALL-UNNAMED
+org.apache.maven.surefire.booter.ForkedBooter
+...
+[ERROR] com.example.util.TestUtil.test2x2  
+  Time elapsed: 0.024 s  <<< ERROR!
+  java.lang.reflect.InaccessibleObjectException: 
+    Unable to make void com.example.util.TestUtil.test2x2() 
+    accessible: 
+      module com.example does not "opens com.example.util" 
+      to unnamed module @5cee5251
+```
+
+New lines added to error message for readability.
+
+**Add open configuration option to surefire plugin (try 1)**
+
+```
+<plugin>
+  <groupId>org.apache.maven.plugins</groupId>
+  <artifactId>maven-surefire-plugin</artifactId>
+  <version>3.0.0-M5</version>
+  <configuration combine.self="append">
+    <argLine>--add-opens com.example=ALL-UNNAMED</argLine>
+  </configuration>
+</plugin>
+...
+$ mvn test
+...
+[ERROR] Error occurred during initialization of boot layer
+...
+[WARNING] Corrupted STDOUT by directly writing to native stream in forked JVM 1.
+
+$ cat $(find target -name '*.dumpstream') 
+      # Created at 2022-02-13T10:25:04.904
+      Corrupted STDOUT by directly writing to native stream in forked JVM 1. Stream 'Error occurred during initialization of boot layer'.
+      
+      # Created at 2022-02-13T10:25:04.906
+      Corrupted STDOUT by directly writing to native stream in forked JVM 1. Stream 'java.lang.RuntimeException: Unable to parse --add-opens <module>/<package>:'.
+      
+      # Created at 2022-02-13T10:25:04.906
+      Corrupted STDOUT by directly writing to native stream in forked JVM 1. Stream 'com.example'.
+```
+
+**Add open configuration option to surefire plugin (try 2)**
+
+```
+
+[ERROR] Tests run: 1, Failures: 0, Errors: 1, Skipped: 0, Time elapsed: 0.041 s <<< FAILURE! - in com.example.util.TestUtil
+[ERROR] com.example.util.TestUtil.test2x2  Time elapsed: 0.023 s  <<< ERROR!
+java.lang.reflect.InaccessibleObjectException: Unable to make void com.example.util.TestUtil.test2x2() accessible: module com.example does not "opens com.example.util" to unnamed module @5cee5251
+
+
+surefire10872153133116271936tmp
+----------------
+#surefire
+#Sun Feb 13 10:35:32 EST 2022
+classPathUrl.4=/Users/mark/.m2/repository/org/junit/platform/junit-platform-commons/1.8.1/junit-platform-commons-1.8.1.jar
+testSuiteDefinitionTestSourceDirectory=/Users/mark/src/mycode/java-test-test/src/test/java
+includes1=**/*Test.java
+classPathUrl.5=/Users/mark/.m2/repository/org/junit/jupiter/junit-jupiter-api/5.8.1/junit-jupiter-api-5.8.1.jar
+includes2=**/*Tests.java
+runOrder=filesystem
+classPathUrl.6=/Users/mark/.m2/repository/org/apiguardian/apiguardian-api/1.1.2/apiguardian-api-1.1.2.jar
+includes0=**/Test*.java
+reportsDirectory=/Users/mark/src/mycode/java-test-test/target/surefire-reports
+tc.0=com.example.util.TestUtil
+mainCliOptions4=SHOW_ERRORS
+surefireClassPathUrl.0=/Users/mark/.m2/repository/org/apache/maven/surefire/surefire-junit-platform/3.0.0-M5/surefire-junit-platform-3.0.0-M5.jar
+mainCliOptions3=LOGGING_LEVEL_DEBUG
+classPathUrl.0=/Users/mark/src/mycode/java-test-test/target/test-classes
+mainCliOptions0=LOGGING_LEVEL_ERROR
+systemExitTimeout=30
+classPathUrl.1=/Users/mark/.m2/repository/org/junit/jupiter/junit-jupiter-engine/5.8.1/junit-jupiter-engine-5.8.1.jar
+failFastCount=0
+classPathUrl.2=/Users/mark/.m2/repository/org/junit/platform/junit-platform-engine/1.8.1/junit-platform-engine-1.8.1.jar
+requestedTest=
+includes3=**/*TestCase.java
+mainCliOptions2=LOGGING_LEVEL_INFO
+classPathUrl.3=/Users/mark/.m2/repository/org/opentest4j/opentest4j/1.2.0/opentest4j-1.2.0.jar
+mainCliOptions1=LOGGING_LEVEL_WARN
+testClassesDirectory=/Users/mark/src/mycode/java-test-test/target/test-classes
+preferTestsFromInStream=false
+useManifestOnlyJar=true
+runStatisticsFile=/Users/mark/src/mycode/java-test-test/.surefire-73332DD9C5B99B78771ECBD65536BC826E28E9E0
+providerConfiguration=org.apache.maven.surefire.junitplatform.JUnitPlatformProvider
+rerunFailingTestsCount=0
+failIfNoTests=false
+isTrimStackTrace=true
+surefireClassPathUrl.5=/Users/mark/.m2/repository/org/junit/platform/junit-platform-launcher/1.8.1/junit-platform-launcher-1.8.1.jar
+forkNodeConnectionString=pipe\://1
+surefireClassPathUrl.3=/Users/mark/.m2/repository/org/apache/maven/surefire/surefire-shared-utils/3.0.0-M4/surefire-shared-utils-3.0.0-M4.jar
+surefireClassPathUrl.4=/Users/mark/.m2/repository/org/apache/maven/surefire/common-java5/3.0.0-M5/common-java5-3.0.0-M5.jar
+surefireClassPathUrl.1=/Users/mark/.m2/repository/org/apache/maven/surefire/surefire-api/3.0.0-M5/surefire-api-3.0.0-M5.jar
+surefireClassPathUrl.2=/Users/mark/.m2/repository/org/apache/maven/surefire/surefire-logger-api/3.0.0-M5/surefire-logger-api-3.0.0-M5.jar
+excludes0=**/*$*
+enableAssertions=true
+childDelegation=false
+pluginPid=46940
+useSystemClassLoader=true
+shutdown=EXIT
+
+
+surefire_013621402358715858175tmp
+----------------
+#surefire_0
+#Sun Feb 13 10:35:32 EST 2022
+basedir=/Users/mark/src/mycode/java-test-test
+user.dir=/Users/mark/src/mycode/java-test-test
+localRepository=/Users/mark/.m2/repository
+
+
+surefireargs5815653060016048109
+----------------
+--module-path
+"/Users/mark/src/mycode/java-test-test/target/classes"
+--class-path
+"/Users/mark/.m2/repository/org/apache/maven/surefire/surefire-booter/3.0.0-M5/surefire-booter-3.0.0-M5.jar:/Users/mark/.m2/repository/org/apache/maven/surefire/surefire-api/3.0.0-M5/surefire-api-3.0.0-M5.jar:/Users/mark/.m2/repository/org/apache/maven/surefire/surefire-logger-api/3.0.0-M5/surefire-logger-api-3.0.0-M5.jar:/Users/mark/.m2/repository/org/apache/maven/surefire/surefire-shared-utils/3.0.0-M4/surefire-shared-utils-3.0.0-M4.jar:/Users/mark/.m2/repository/org/apache/maven/surefire/surefire-extensions-spi/3.0.0-M5/surefire-extensions-spi-3.0.0-M5.jar:/Users/mark/src/mycode/java-test-test/target/test-classes:/Users/mark/.m2/repository/org/junit/jupiter/junit-jupiter-engine/5.8.1/junit-jupiter-engine-5.8.1.jar:/Users/mark/.m2/repository/org/junit/platform/junit-platform-engine/1.8.1/junit-platform-engine-1.8.1.jar:/Users/mark/.m2/repository/org/opentest4j/opentest4j/1.2.0/opentest4j-1.2.0.jar:/Users/mark/.m2/repository/org/junit/platform/junit-platform-commons/1.8.1/junit-platform-commons-1.8.1.jar:/Users/mark/.m2/repository/org/junit/jupiter/junit-jupiter-api/5.8.1/junit-jupiter-api-5.8.1.jar:/Users/mark/.m2/repository/org/apiguardian/apiguardian-api/1.1.2/apiguardian-api-1.1.2.jar:/Users/mark/.m2/repository/org/apache/maven/surefire/surefire-junit-platform/3.0.0-M5/surefire-junit-platform-3.0.0-M5.jar:/Users/mark/.m2/repository/org/apache/maven/surefire/common-java5/3.0.0-M5/common-java5-3.0.0-M5.jar:/Users/mark/.m2/repository/org/junit/platform/junit-platform-launcher/1.8.1/junit-platform-launcher-1.8.1.jar"
+--patch-module
+com.example="/Users/mark/src/mycode/java-test-test/target/test-classes"
+--add-exports
+com.example/com.example.util=ALL-UNNAMED
+--add-modules
+com.example
+--add-reads
+com.example=ALL-UNNAMED
+org.apache.maven.surefire.booter.ForkedBooter
+```
+
+I gave up at this point trying to get a timing with maven surefire.
 
 
 Links
